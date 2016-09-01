@@ -73,21 +73,8 @@ rocksdb::Status Rdb_sst_file::open()
     return s;
   }
 
-  // Create an sst file writer with the current options and comparator,
-  // turning off compression.
-
-  /*
-    The correct thing will be to ask the column family to give us the
-    comparator but this won't work until I am able to commit
-    https://reviews.facebook.net/D61155 but that is not working
-    correctly because of a test framework failure.  Until that is
-    working I am going to check this in with an alternate method.
-    After I am able to land that diff in RocksDB I'll come back
-    and change to the cleaner method.
-  */
-  // const rocksdb::Comparator* comparator= m_cf->GetComparator();
-  const rocksdb::Comparator* comparator=
-      Rdb_cf_options::get_cf_comparator(m_cf->GetName());
+  // Create an sst file writer with the current options and comparator
+  const rocksdb::Comparator* comparator= m_cf->GetComparator();
 
   rocksdb::EnvOptions env_options(m_db_options);
   rocksdb::Options options(m_db_options, cf_descr.options);
@@ -127,7 +114,9 @@ rocksdb::Status Rdb_sst_file::commit()
   {
     std::vector<std::string> files = { m_name };
     // Add the file to the database
-    s= m_db->AddFile(m_cf, files, true);
+    // Set the skip_snapshot_check parameter to true since no one
+    // should be accessing the table we are bulk loading
+    s= m_db->AddFile(m_cf, files, true, true);
   }
 
   delete m_sst_file_writer;

@@ -126,11 +126,11 @@ file_exists $MYSQLD_DATADIR/master-bin.000003;
 -- replace_regex /\.[\\\/]master/master/
 SELECT @index;
 
---echo # crash_purge_critical_after_update_index
+--echo # crash_purge_critical_before_update_index
 flush logs;
 
 --exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
-SET SESSION debug="+d,crash_purge_critical_after_update_index";
+SET SESSION debug="+d,crash_purge_critical_before_update_index";
 --error 2013
 purge binary logs TO 'master-bin.000006';
 
@@ -411,9 +411,11 @@ purge binary logs TO 'master-bin.000014';
 -- source include/wait_until_connected_again.inc
 -- disable_reconnect
 
--- echo # Test the index file is complete, although is not purged successfully.
+-- echo # Test if both the index file and binlogs are in sync
 -- source include/show_binary_logs.inc
+-- error 1
 file_exists $MYSQLD_DATADIR/master-bin.000012;
+-- error 1
 file_exists $MYSQLD_DATADIR/master-bin.000013;
 file_exists $MYSQLD_DATADIR/master-bin.000014;
 

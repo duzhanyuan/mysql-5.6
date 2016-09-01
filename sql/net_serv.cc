@@ -45,6 +45,7 @@
 #include <errno.h>
 #include <sys/uio.h>
 #include "probes_mysql.h"
+#include <openssl/ssl.h>
 
 #include <algorithm>
 
@@ -116,6 +117,7 @@ my_bool my_net_init(NET *net, Vio* vio)
   net->where_b = net->remain_in_buf=0;
   net->last_errno=0;
   net->unused= 0;
+  net->ssl = NULL;
 
   net->read_rows_is_first_read = TRUE;
 
@@ -138,6 +140,12 @@ void net_end(NET *net)
   DBUG_ENTER("net_end");
   my_free(net->buff);
   net->buff=0;
+#ifdef HAVE_OPENSSL
+  if (net->ssl) {
+    SSL_free(net->ssl);
+    net->ssl = NULL;
+  }
+#endif
   DBUG_VOID_RETURN;
 }
 
@@ -984,8 +992,16 @@ static my_bool net_read_raw_loop(NET *net, size_t count)
   {
     size_t recvcnt= vio_read(net->vio, buf, count);
 
-    /* VIO_SOCKET_ERROR (-1) indicates an error. */
-    if (recvcnt == VIO_SOCKET_ERROR)
+    /*
+       VIO_SOCKET_ERROR (-1) indicates an error.
+       A return of (-2) or (-3) indicates a non-blocking action
+       For safety if subtracting recvcnt from count would cause
+       underflow treat it like an error.
+       Be careful with integer overflow/underflow since all
+       local variables are size_t
+     */
+    if (recvcnt == VIO_SOCKET_ERROR
+        || recvcnt > count)
     {
       /* A recoverable I/O error occurred? */
       if (net_should_retry(net, &retry_count))
@@ -1605,7 +1621,9 @@ my_net_read(NET *net)
     net->remain_in_buf= (ulong) (buf_length - start_of_packet);
     len = ((ulong) (start_of_packet - first_packet_offset) - NET_HEADER_SIZE -
            multi_byte_packet);
-    net->save_char= net->read_pos[len];	/* Must be saved */
+    if (net->remain_in_buf) {
+      net->save_char= net->read_pos[len + multi_byte_packet];
+    }
     net->read_pos[len]=0;		/* Safeguard for mysql_use_result */
   }
 #endif /* HAVE_COMPRESS */

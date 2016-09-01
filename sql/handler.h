@@ -35,6 +35,7 @@
 #include <my_compare.h>
 #include <ft_global.h>
 #include <keycache.h>
+#include <regex>
 #include <vector>
 #include <unordered_set>
 
@@ -1835,13 +1836,61 @@ public:
   virtual ~Handler_share() {}
 };
 
-extern std::vector<std::string> gap_lock_exception_list;
-bool is_table_in_list(const std::string& table_name,
-                      const std::vector<std::string>& table_list,
-                      mysql_rwlock_t* lock);
-std::vector<std::string> split(const std::string& input, char delimiter);
+class Regex_list_handler
+{
+ private:
+#if defined(HAVE_PSI_INTERFACE)
+  const PSI_rwlock_key& m_key;
+#endif
+
+  char m_delimiter;
+  std::string m_bad_pattern_str;
+  const std::regex* m_pattern;
+
+  mutable mysql_rwlock_t m_rwlock;
+
+  Regex_list_handler(const Regex_list_handler& other)= delete;
+  Regex_list_handler& operator=(const Regex_list_handler& other)= delete;
+
+ public:
+#if defined(HAVE_PSI_INTERFACE)
+  Regex_list_handler(const PSI_rwlock_key& key,
+                     char delimiter= ',') :
+    m_key(key),
+#else
+  Regex_list_handler(char delimiter= ',') :
+#endif
+    m_delimiter(delimiter),
+    m_bad_pattern_str(""),
+    m_pattern(nullptr)
+  {
+    mysql_rwlock_init(key, &m_rwlock);
+  }
+
+  ~Regex_list_handler()
+  {
+    mysql_rwlock_destroy(&m_rwlock);
+    delete m_pattern;
+  }
+
+  // Set the list of patterns
+  bool set_patterns(const std::string& patterns);
+
+  // See if a string matches at least one pattern
+  bool matches(const std::string& str) const;
+
+  // See the list of bad patterns
+  const std::string& bad_pattern() const
+  {
+    return m_bad_pattern_str;
+  }
+};
+
+extern Regex_list_handler* gap_lock_exceptions;
 std::unordered_set<std::string> split_into_set(const std::string& input,
                                                char delimiter);
+void warn_about_bad_patterns(const Regex_list_handler* regex_list_handler,
+                             const char *name);
 
 /**
   The handler class is the interface for dynamically loadable
@@ -2397,11 +2446,11 @@ protected:
     return index_read_last(buf, key, key_len);
   }
   bool is_using_full_key(key_part_map keypart_map, uint actual_key_parts);
-  bool is_using_full_primary_key(uint active_index,
+  bool is_using_full_unique_key(uint active_index,
                                  key_part_map keypart_map,
                                  enum ha_rkey_function find_flag);
   bool is_using_prohibited_gap_locks(TABLE *table,
-                                     bool using_full_primary_key);
+                                     bool using_full_unique_key);
 public:
   virtual int read_range_first(const key_range *start_key,
                                const key_range *end_key,
@@ -3420,10 +3469,10 @@ public:
      Determine whether the storage engine asks for row-based replication that
      may skip the lookup of the old row image.
 
-     @return true if old rows should be read (the default)
-             false if old rows should not be read
+     @return true if old rows should not be read
+             false if old rows should be read (the default)
    */
-  virtual bool rpl_lookup_rows() { return true; }
+  virtual bool use_read_free_rpl() { return false; }
   /*
      Storage engine hooks to be called before and after row write, delete, and
      update events

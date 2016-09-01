@@ -143,6 +143,12 @@ enum enum_admission_control_filter {
   ADMISSION_CONTROL_END = 64
 };
 
+enum enum_session_track_gtids {
+  OFF= 0,
+  OWN_GTID= 1/*,
+  ALL_GTIDS= 2 not ported*/
+};
+
 #define IS_BIT_SET(val, n) ((val) & (1 << (n)))
 
 /* Bits for different SQL modes modes (including ANSI mode) */
@@ -179,8 +185,13 @@ enum enum_admission_control_filter {
 #define MODE_NO_ENGINE_SUBSTITUTION     (MODE_HIGH_NOT_PRECEDENCE*2)
 #define MODE_PAD_CHAR_TO_FULL_LENGTH    (ULL(1) << 31)
 
-/* Minimal object names in the result set metadata. */
-#define PROTO_MODE_MINIMAL_OBJECT_NAMES_IN_RSMD    (ULL(1) << 0)
+enum enum_protocol_mode
+{
+  /* Default. */
+  PROTO_MODE_OFF= 0,
+  /* Minimal object names in the result set metadata. */
+  PROTO_MODE_MINIMAL_OBJECT_NAMES_IN_RSMD= 1,
+};
 
 extern char internal_table_name[2];
 extern char empty_c_string[1];
@@ -581,6 +592,7 @@ typedef struct system_variables
   ulonglong max_heap_table_size;
   ulonglong tmp_table_size;
   ulonglong tmp_table_max_file_size;
+  ulonglong filesort_max_file_size;
   ulonglong long_query_time;
   my_bool end_markers_in_json;
   my_bool disable_trigger;
@@ -621,6 +633,7 @@ typedef struct system_variables
   ulong net_write_timeout_seconds;
   ulong optimizer_prune_level;
   ulong optimizer_search_depth;
+  ulong range_optimizer_max_mem_size;
   ulong preload_buff_size;
   ulong profiling_history_size;
   ulong read_buff_size;
@@ -706,6 +719,7 @@ typedef struct system_variables
 
   Gtid_specification gtid_next;
   Gtid_set_or_null gtid_next_list;
+  ulong session_track_gtids;
   /**
     Compatibility option to mark the pre MySQL-5.6.4 temporals columns using
     the old format using comments for SHOW CREATE TABLE and in I_S.COLUMNS
@@ -2422,11 +2436,9 @@ public:
   /* whether the transaction is a writer */
   bool rw_trans = false;
   /* record the current statement start time */
-  ulonglong stmt_start;
-  /* record the current statement time */
-  ulonglong stmt_time;
+  ulonglong stmt_start = 0;
   /* record the transaction time (including in-fly) */
-  ulonglong trx_time;
+  ulonglong trx_time = 0;
 
   /**
     @note
@@ -2752,6 +2764,10 @@ private:
   /**@}*/
 
 public:
+  const char *get_trans_gtid() const {
+    return m_trans_gtid;
+  }
+
   void issue_unsafe_warnings();
 
   uint get_binlog_table_maps() const {

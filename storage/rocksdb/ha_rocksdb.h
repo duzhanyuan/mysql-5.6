@@ -248,6 +248,8 @@ struct st_export_stats {
 
 }  // namespace myrocks
 
+#include "./rdb_buff.h"
+
 /* Provide hash function for GL_INDEX_ID so we can include it in sets */
 namespace std {
   template <>
@@ -323,15 +325,8 @@ class ha_rocksdb: public my_core::handler
   */
   uchar *m_end_key_packed_tuple;
 
-  /*
-    Same as above, but it stores the value part. It holds unpack info which
-    is currently not used (always empty).
-
-    TODO: why does ha_rocksdb::open() assume that an upper bound of the size of
-    this buffer is max_packed_sk_len? This is technically true currently,
-    but doesn't look meaningful.
-  */
-  uchar *m_sk_tails;
+  Rdb_string_writer m_sk_tails;
+  Rdb_string_writer m_pk_unpack_info;
 
   /*
     ha_rockdb->index_read_map(.. HA_READ_KEY_EXACT or similar) will save here
@@ -345,7 +340,7 @@ class ha_rocksdb: public my_core::handler
 
   /* Second buffers, used by UPDATE. */
   uchar *m_sk_packed_tuple_old;
-  uchar *m_sk_tails_old;
+  Rdb_string_writer m_sk_tails_old;
 
   /*
     Temporary space for packing VARCHARs (we provide it to
@@ -378,6 +373,9 @@ class ha_rocksdb: public my_core::handler
   /* TRUE means we are accessing the first row after a snapshot was created */
   bool m_rnd_scan_is_new_snapshot;
 
+  /* TRUE means the replication slave will use Read Free Replication */
+  bool m_use_read_free_rpl;
+
   /**
     @brief
     This is a bitmap of indexes (i.e. a set) whose keys (in future, values) may
@@ -396,11 +394,10 @@ class ha_rocksdb: public my_core::handler
   */
   int m_dupp_errkey;
 
-  int create_key_defs(const TABLE *table_arg, const std::string& db_table,
-                      Rdb_tbl_def *tbl_def_arg,
+  int create_key_defs(const TABLE *table_arg, Rdb_tbl_def *tbl_def_arg,
                       const TABLE *old_table_arg= nullptr,
                       const Rdb_tbl_def *old_tbl_def_arg= nullptr)
-      __attribute__((__nonnull__(2, 4), __warn_unused_result__));
+      __attribute__((__nonnull__(2, 3), __warn_unused_result__));
   int secondary_index_read(const int keyno, uchar *buf)
       __attribute__((__nonnull__, __warn_unused_result__));
   void setup_iterator_for_rnd_scan();
@@ -513,11 +510,6 @@ class ha_rocksdb: public my_core::handler
   */
   void update_stats(void);
 
-  /*
-    Helper for convert_record_to_storage_format for writing unpack_info.
-  */
-  void write_unpack_info(void);
-
 public:
   /*
     Controls whether writes include checksums. This is updated from the session variable
@@ -530,7 +522,12 @@ public:
   int m_checksums_pct;
 
   ha_rocksdb(my_core::handlerton *hton, my_core::TABLE_SHARE *table_arg);
-  ~ha_rocksdb() {}
+  ~ha_rocksdb()
+  {
+    int err __attribute__((__unused__));
+    err= finalize_bulk_load();
+    DBUG_ASSERT(err == 0);
+  }
 
   /** @brief
     The name that will be used for display purposes.
@@ -610,6 +607,7 @@ public:
     __attribute__((__nonnull__, __warn_unused_result__));
 
   void convert_record_to_storage_format(const rocksdb::Slice& pk_packed_slice,
+                                        Rdb_string_writer *pk_unpack_info,
                                         rocksdb::Slice *packed_rec)
     __attribute__((__nonnull__));
 
@@ -684,8 +682,7 @@ public:
     __attribute__((__warn_unused_result__));;
 
   virtual double scan_time() { return (double) (stats.records+stats.deleted) / 20.0+10; }
-  virtual double read_time(uint, uint, ha_rows rows)
-  { return (double) rows /  20.0+1; }
+  virtual double read_time(uint, uint, ha_rows rows) override;
 
   int open(const char *name, int mode, uint test_if_locked)
     __attribute__((__warn_unused_result__));
@@ -728,12 +725,15 @@ private:
     const uchar*     old_data;
     rocksdb::Slice   new_pk_slice;
     rocksdb::Slice   old_pk_slice;
+
+    // "unpack_info" data for the new PK value
+    Rdb_string_writer *new_pk_unpack_info;
+
     longlong         hidden_pk_id;
     bool             skip_unique_check;
   };
 
-  int create_cfs(const TABLE *table_arg, const std::string& db_table,
-                 Rdb_tbl_def *tbl_def_arg,
+  int create_cfs(const TABLE *table_arg, Rdb_tbl_def *tbl_def_arg,
                  std::array<struct key_def_cf_info, MAX_INDEXES + 1>* cfs);
     __attribute__((__nonnull__, __warn_unused_result__));
 
@@ -949,12 +949,14 @@ public:
 
   int finalize_bulk_load() __attribute__((__warn_unused_result__));
 
+  void set_use_read_free_rpl(const char* whitelist);
+
  public:
   virtual void rpl_before_delete_rows() override;
   virtual void rpl_after_delete_rows() override;
   virtual void rpl_before_update_rows() override;
   virtual void rpl_after_update_rows() override;
-  virtual bool rpl_lookup_rows();
+  virtual bool use_read_free_rpl();
 
  private:
   /* Flags tracking if we are inside different replication operation */

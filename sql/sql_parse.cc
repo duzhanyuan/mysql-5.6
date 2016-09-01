@@ -2935,9 +2935,6 @@ mysql_execute_command(THD *thd,
   DBUG_ASSERT(!lex->describe || is_explainable_query(lex->sql_command));
 
   thd->stmt_start = *statement_start_time;
-  // if last statement is a real transaction, restart trx timer
-  if (thd->is_real_trans)
-    thd->trx_time = 0;
 
   if (unlikely(lex->is_broken()))
   {
@@ -3137,13 +3134,15 @@ mysql_execute_command(THD *thd,
     */
     if (deny_updates_if_read_only_option(thd, all_tables))
     {
+      std::string extra_info;
+      int nr = get_active_master_info(&extra_info);
       if (opt_super_readonly)
       {
-        my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only (super)");
+        my_error(nr, MYF(0), "--read-only (super)", extra_info.c_str());
       }
       else
       {
-        my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only");
+        my_error(nr, MYF(0), "--read-only", extra_info.c_str());
       }
       DBUG_RETURN(-1);
     }
@@ -4132,13 +4131,15 @@ end_with_restore_list:
         break;
       if (check_ro(thd) && some_non_temp_table_to_be_updated(thd, all_tables))
       {
+        std::string extra_info;
+        int nr = get_active_master_info(&extra_info);
         if (opt_super_readonly)
         {
-          my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only (super)");
+          my_error(nr, MYF(0), "--read-only (super)", extra_info.c_str());
         }
         else
         {
-          my_error(ER_OPTION_PREVENTS_STATEMENT, MYF(0), "--read-only");
+          my_error(nr, MYF(0), "--read-only", extra_info.c_str());
         }
 	break;
       }
@@ -5921,13 +5922,15 @@ finish:
       trans_commit_stmt(thd, lex->async_commit);
       thd->get_stmt_da()->set_overwrite_status(false);
 
-      // record Statement_seconds
-      thd->stmt_time = my_timer_since(*statement_start_time);
-      // add to Transaction_seconds
-      thd->trx_time += thd->stmt_time;
+      // add current statement_time to transaction_time in an open transaction
+      if (!thd->is_real_trans)
+        thd->trx_time += my_timer_since(*statement_start_time);
     }
   }
 
+  // reset trx timer at the end of a transaction
+  if (thd->is_real_trans)
+    thd->trx_time = 0;
   // Reset statement start time
   thd->stmt_start = 0;
   lex->unit.cleanup();
@@ -9899,4 +9902,31 @@ THD* get_opt_thread_with_data_lock(THD *thd, ulong thread_id)
     my_error(ER_NO_SUCH_THREAD, MYF(0), thread_id);
 
   return ret_thd;
+}
+
+// This function will generate the string containing current master host and
+// port info if available.
+//
+// Return value:
+//   ER_OPTION_PREVENTS_STATEMENT_EXTRA_INFO, if master info is available.
+//   ER_OPTION_PREVENTS_STATEMENT, if master info is not available.
+int get_active_master_info(std::string *str_ptr)
+{
+#ifdef HAVE_REPLICATION
+    if (str_ptr && active_mi && active_mi->host && active_mi->host[0])
+    {
+      *str_ptr = "Current master_host: ";
+      *str_ptr += active_mi->host;
+      *str_ptr += ", master_port: ";
+      *str_ptr += std::to_string(active_mi->port);
+      const char *extra_str = opt_read_only_error_msg_extra;
+      if (extra_str && extra_str[0])
+      {
+        *str_ptr += ". ";
+        *str_ptr += extra_str;
+      }
+      return ER_OPTION_PREVENTS_STATEMENT_EXTRA_INFO;
+    }
+#endif
+    return ER_OPTION_PREVENTS_STATEMENT;
 }

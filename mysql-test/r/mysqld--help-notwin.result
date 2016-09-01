@@ -276,6 +276,9 @@ The following options may be given as the first argument:
  --fatal-semaphore-timeout=# 
  Maximum number of seconds that semaphore times out in
  innodb.
+ --filesort-max-file-size=# 
+ The max size of a file to use for filesort. Raise an
+ error when this is exceeded. 0 means no limit.
  --flush             Flush MyISAM tables to disk between SQL commands
  --flush-time=#      A dedicated thread is created to flush all tables at the
  given interval
@@ -836,8 +839,8 @@ The following options may be given as the first argument:
  Allow PROCESS to disable bin log, not just SUPER
  (Defaults to on; use --skip-process-can-disable-bin-log to disable.)
  --protocol-mode=name 
- Syntax: protocol-mode=mode[,mode[,mode...]]. See the
- manual for the complete list of valid protocol modes
+ Syntax: protocol-mode=mode. See the manual for the
+ complete list of valid protocol modes
  --query-alloc-block-size=# 
  Allocation block size for query parsing and execution
  --query-cache-limit=# 
@@ -857,6 +860,14 @@ The following options may be given as the first argument:
  --range-alloc-block-size=# 
  Allocation block size for storing ranges during
  optimization
+ --range-optimizer-max-mem-size=# 
+ Maximum amount of memory used by the range optimizer to
+ allocate predicates during range analysis. The larger the
+ number, more memory may be consumed during range
+ analysis. If the value is too low to completed range
+ optimization of a query, index range scan will not be
+ considered for this query. A value of 0 means range
+ optimizer does not have any cap on memory. 
  --rbr-idempotent-tables=name 
  slave_exec_mode is set to IDEMPOTENT for these list of
  tables. The table names are assumed to be separated by
@@ -870,6 +881,9 @@ The following options may be given as the first argument:
  --read-only         Make all non-temporary tables read-only, with the
  exception for replication (slave) threads and users with
  the SUPER privilege
+ --read-only-error-msg-extra[=name] 
+ Set this variable to print out extra error information,
+ which will be appended to read_only error messages.
  --read-only-slave   Blocks disabling read_only if the server is a slave. This
  is helpful in asserting that read_only is never disabled
  on a slave. Slave with read_only=0 may generate new GTID
@@ -1180,12 +1194,12 @@ The following options may be given as the first argument:
  (Defaults to on; use --skip-rocksdb-pin-l0-filter-and-index-blocks-in-cache to disable.)
  --rocksdb-rate-limiter-bytes-per-sec=# 
  DBOptions::rate_limiter bytes_per_sec for RocksDB
+ --rocksdb-read-free-rpl-tables=name 
+ List of tables that will use read-free replication on the
+ slave (i.e. not lookup a row during replication)
  --rocksdb-records-in-range=# 
  Used to override the result of records_in_range(). Set to
  a positive number to override
- --rocksdb-rpl-lookup-rows 
- Lookup a row on replication slave
- (Defaults to on; use --skip-rocksdb-rpl-lookup-rows to disable.)
  --rocksdb-seconds-between-stat-computes=# 
  Sets a number of seconds to wait between optimizer stats
  recomputation. Only changed indexes will be refreshed.
@@ -1279,6 +1293,10 @@ The following options may be given as the first argument:
  --server-id=#       Uniquely identifies the server instance in the community
  of replication partners
  --server-id-bits=#  Set number of significant bits in server-id
+ --session-track-gtids=name 
+ Controls the amount of global transaction ids to be
+ included in the response packet sent by the
+ server.(Default: OFF).
  --show-old-temporals 
  When this option is enabled, the pre-5.6.4 temporal types
  will be marked in the 'SHOW CREATE TABLE' and
@@ -1590,6 +1608,7 @@ expire-logs-days 0
 explicit-defaults-for-timestamp FALSE
 external-locking FALSE
 fatal-semaphore-timeout 600
+filesort-max-file-size 0
 flush FALSE
 flush-time 0
 ft-boolean-syntax + -><()~*:""&|
@@ -1786,9 +1805,11 @@ query-cache-type OFF
 query-cache-wlock-invalidate FALSE
 query-prealloc-size 8192
 range-alloc-block-size 4096
+range-optimizer-max-mem-size 1536000
 rbr-idempotent-tables (No default value)
 read-buffer-size 131072
 read-only FALSE
+read-only-error-msg-extra 
 read-only-slave TRUE
 read-rnd-buffer-size 262144
 relay-log (No default value)
@@ -1880,8 +1901,8 @@ rocksdb-perf-context-global ON
 rocksdb-perf-context-level 0
 rocksdb-pin-l0-filter-and-index-blocks-in-cache TRUE
 rocksdb-rate-limiter-bytes-per-sec 0
+rocksdb-read-free-rpl-tables (No default value)
 rocksdb-records-in-range 0
-rocksdb-rpl-lookup-rows TRUE
 rocksdb-seconds-between-stat-computes 3600
 rocksdb-signal-drop-index-thread FALSE
 rocksdb-skip-bloom-filter-on-read FALSE
@@ -1920,6 +1941,7 @@ select-into-file-fsync-timeout 0
 send-error-before-closing-timed-out-connection TRUE
 server-id 0
 server-id-bits 32
+session-track-gtids OFF
 show-old-temporals FALSE
 show-slave-auth-info FALSE
 simplified-binlog-gtid-recovery FALSE
